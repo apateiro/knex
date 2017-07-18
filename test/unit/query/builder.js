@@ -28,12 +28,14 @@ var clientsWithNullAsDefault = {
   mssql: new MSSQL_Client(useNullAsDefaultConfig),
 }
 
+// note: as a workaround, we are using postgres here, since that's using the default " field wrapping
+// otherwise subquery cloning would need to be fixed. See: https://github.com/tgriesser/knex/pull/2063
 function qb() {
-  return clients.sqlite3.queryBuilder()
+  return clients.postgres.queryBuilder()
 }
 
 function raw(sql, bindings) {
-  return clients.sqlite3.raw(sql, bindings)
+  return clients.postgres.raw(sql, bindings)
 }
 
 function verifySqlResult(dialect, expectedObj, sqlObj) {
@@ -341,7 +343,7 @@ describe("QueryBuilder", function() {
   it('where bool', function() {
     testquery(qb().select('*').from('users').where(true), {
       mysql: 'select * from `users` where 1 = 1',
-      sqlite3: 'select * from "users" where 1 = 1',
+      sqlite3: 'select * from `users` where 1 = 1',
       mssql: 'select * from [users] where 1 = 1',
       postgres: 'select * from "users" where 1 = 1'
     });
@@ -677,7 +679,7 @@ describe("QueryBuilder", function() {
         bindings: [0]
       },
       sqlite3: {
-        sql: 'select * from "users" where 1 = ?',
+        sql: 'select * from `users` where 1 = ?',
         bindings: [0]
       },
       mssql: {
@@ -698,7 +700,7 @@ describe("QueryBuilder", function() {
         bindings: [1]
       },
       sqlite3: {
-        sql: 'select * from "users" where 1 = ?',
+        sql: 'select * from `users` where 1 = ?',
         bindings: [1]
       },
       mssql: {
@@ -1590,6 +1592,31 @@ describe("QueryBuilder", function() {
     });
   });
 
+  it("limits and raw selects", function() {
+    testsql(qb().select(raw('name = ? as isJohn', ['john'])).from('users').limit(1), {
+      mysql: {
+        sql: 'select name = ? as isJohn from `users` limit ?',
+        bindings: ['john', 1]
+      },
+      oracle: {
+        sql: 'select * from (select name = ? as isJohn from "users") where rownum <= ?',
+        bindings: ['john', 1]
+      },
+      mssql: {
+        sql: 'select top (?) name = ? as isJohn from [users]',
+        bindings: [1, 'john']
+      },
+      oracledb: {
+        sql: 'select * from (select name = ? as isJohn from "users") where rownum <= ?',
+        bindings: ['john', 1]
+      },
+      postgres: {
+        sql: 'select name = ? as isJohn from "users" limit ?',
+        bindings: ['john', 1]
+      }
+    });
+  });
+
   it("first", function() {
     testsql(qb().first('*').from('users'), {
       mysql: {
@@ -1622,7 +1649,7 @@ describe("QueryBuilder", function() {
         bindings: [5]
       },
       sqlite3: {
-        sql: 'select * from "users" limit ? offset ?',
+        sql: 'select * from `users` limit ? offset ?',
         bindings: [-1, 5]
       },
       postgres: {
@@ -1866,6 +1893,69 @@ describe("QueryBuilder", function() {
     });
   });
 
+  it("cross join", function() {
+    testsql(qb().select('*').from('users').crossJoin('contracts').crossJoin('photos'), {
+      mysql: {
+        sql: 'select * from `users` cross join `contracts` cross join `photos`',
+        bindings: []
+      },
+      mssql: {
+        sql: 'select * from [users] cross join [contracts] cross join [photos]',
+        bindings: []
+      },
+      postgres: {
+        sql: 'select * from "users" cross join "contracts" cross join "photos"',
+        bindings: []
+      },
+      sqlite3: {
+        sql: 'select * from `users` cross join `contracts` cross join `photos`',
+        bindings: []
+      },
+      oracle: {
+        sql: 'select * from "users" cross join "contracts" cross join "photos"',
+        bindings: []
+      },
+      oracledb: {
+        sql: 'select * from "users" cross join "contracts" cross join "photos"',
+        bindings: []
+      }
+    });
+  });
+
+  it("full outer join", function() {
+    testsql(qb().select('*').from('users').fullOuterJoin('contacts', 'users.id', '=', 'contacts.id'), {
+      mssql: {
+        sql: 'select * from [users] full outer join [contacts] on [users].[id] = [contacts].[id]',
+        bindings: []
+      },
+      oracle: {
+        sql: 'select * from "users" full outer join "contacts" on "users"."id" = "contacts"."id"',
+        bindings: []
+      },
+      oracledb: {
+        sql: 'select * from "users" full outer join "contacts" on "users"."id" = "contacts"."id"',
+        bindings: []
+      },
+      postgres: {
+        sql: 'select * from "users" full outer join "contacts" on "users"."id" = "contacts"."id"',
+        bindings: []
+      }
+    });
+  });
+
+  it("cross join on", function() {
+    testsql(qb().select('*').from('users').crossJoin('contracts', 'users.contractId', 'contracts.id'), {
+      mysql: {
+        sql: 'select * from `users` cross join `contracts` on `users`.`contractId` = `contracts`.`id`',
+        bindings: []
+      },
+      sqlite3: {
+        sql: 'select * from `users` cross join `contracts` on `users`.`contractId` = `contracts`.`id`',
+        bindings: []
+      },
+    });
+  });
+
   it("basic joins", function() {
     testsql(qb().select('*').from('users').join('contacts', 'users.id', '=', 'contacts.id').leftJoin('photos', 'users.id', '=', 'photos.id'), {
       mysql: {
@@ -1878,6 +1968,31 @@ describe("QueryBuilder", function() {
       },
       postgres: {
         sql: 'select * from "users" inner join "contacts" on "users"."id" = "contacts"."id" left join "photos" on "users"."id" = "photos"."id"',
+        bindings: []
+      }
+    });
+  });
+
+  it("right (outer) joins", function() {
+    testsql(qb().select('*').from('users').rightJoin('contacts', 'users.id', '=', 'contacts.id').rightOuterJoin('photos', 'users.id', '=', 'photos.id'), {
+      mssql: {
+        sql: 'select * from [users] right join [contacts] on [users].[id] = [contacts].[id] right outer join [photos] on [users].[id] = [photos].[id]',
+        bindings: []
+      },
+      mysql: {
+        sql: 'select * from `users` right join `contacts` on `users`.`id` = `contacts`.`id` right outer join `photos` on `users`.`id` = `photos`.`id`',
+        bindings: []
+      },
+      oracle: {
+        sql: 'select * from "users" right join "contacts" on "users"."id" = "contacts"."id" right outer join "photos" on "users"."id" = "photos"."id"',
+        bindings: []
+      },
+      oracledb: {
+        sql: 'select * from "users" right join "contacts" on "users"."id" = "contacts"."id" right outer join "photos" on "users"."id" = "photos"."id"',
+        bindings: []
+      },
+      postgres: {
+        sql: 'select * from "users" right join "contacts" on "users"."id" = "contacts"."id" right outer join "photos" on "users"."id" = "photos"."id"',
         bindings: []
       }
     });
@@ -2343,7 +2458,7 @@ describe("QueryBuilder", function() {
         bindings: ['foo', 'taylor', 'bar', 'dayle']
       },
       sqlite3: {
-        sql: 'insert into "users" ("email", "name") select ? as "email", ? as "name" union all select ? as "email", ? as "name"',
+        sql: 'insert into `users` (`email`, `name`) select ? as `email`, ? as `name` union all select ? as `email`, ? as `name`',
         bindings: ['foo', 'taylor', 'bar', 'dayle']
       },
       oracle: {
@@ -2368,7 +2483,7 @@ describe("QueryBuilder", function() {
   it("multiple inserts with partly undefined keys client with configuration nullAsDefault: true", function() {
     testquery(qb().from('users').insert([{email: 'foo', name: 'taylor'}, {name: 'dayle'}]), {
       mysql: "insert into `users` (`email`, `name`) values ('foo', 'taylor'), (NULL, 'dayle')",
-      sqlite3: 'insert into "users" ("email", "name") select \'foo\' as "email", \'taylor\' as "name" union all select NULL as "email", \'dayle\' as "name"',
+      sqlite3: 'insert into `users` (`email`, `name`) select \'foo\' as `email`, \'taylor\' as `name` union all select NULL as `email`, \'dayle\' as `name`',
       oracle: 'begin execute immediate \'insert into "users" ("email", "name") values (:1, :2)\' using \'foo\', \'taylor\'; execute immediate \'insert into "users" ("email", "name") values (:1, :2)\' using NULL, \'dayle\';end;',
       mssql: "insert into [users] ([email], [name]) values ('foo', 'taylor'), (NULL, 'dayle')",
       oracledb: 'begin execute immediate \'insert into "users" ("email", "name") values (:1, :2)\' using \'foo\', \'taylor\'; execute immediate \'insert into "users" ("email", "name") values (:1, :2)\' using NULL, \'dayle\';end;',
@@ -2403,7 +2518,7 @@ describe("QueryBuilder", function() {
         bindings: ['foo', 'taylor', 'bar', 'dayle']
       },
       sqlite3: {
-        sql: "insert into \"users\" (\"email\", \"name\") select ? as \"email\", ? as \"name\" union all select ? as \"email\", ? as \"name\"",
+        sql: "insert into `users` (`email`, `name`) select ? as `email`, ? as `name` union all select ? as `email`, ? as `name`",
       },
       postgres: {
         sql: "insert into \"users\" (\"email\", \"name\") values (?, ?), (?, ?) returning \"id\"",
@@ -2447,7 +2562,7 @@ describe("QueryBuilder", function() {
         bindings: ['foo', 'taylor', 'bar', 'dayle']
       },
       sqlite3: {
-        sql: "insert into \"users\" (\"email\", \"name\") select ? as \"email\", ? as \"name\" union all select ? as \"email\", ? as \"name\"",
+        sql: "insert into `users` (`email`, `name`) select ? as `email`, ? as `name` union all select ? as `email`, ? as `name`",
         bindings: ['foo', 'taylor', 'bar', 'dayle']
       },
       postgres: {
@@ -2519,7 +2634,7 @@ describe("QueryBuilder", function() {
         bindings: [1, 2, 2, 3]
       },
       sqlite3: {
-        sql: 'insert into "table" ("a", "b", "c") select ? as "a", ? as "b", ? as "c" union all select ? as "a", ? as "b", ? as "c" union all select ? as "a", ? as "b", ? as "c"',
+        sql: 'insert into `table` (`a`, `b`, `c`) select ? as `a`, ? as `b`, ? as `c` union all select ? as `a`, ? as `b`, ? as `c` union all select ? as `a`, ? as `b`, ? as `c`',
         bindings: [1, undefined, undefined, undefined, 2, undefined, 2, undefined, 3]
       },
       oracle: {
@@ -2599,7 +2714,7 @@ describe("QueryBuilder", function() {
         bindings: []
       },
       sqlite3: {
-        sql: 'insert into "users" default values',
+        sql: 'insert into `users` default values',
         bindings: []
       },
       postgres: {
@@ -2758,7 +2873,7 @@ describe("QueryBuilder", function() {
       },
       mssql: {
         sql: 'update top (?) [users] set [email] = ?, [name] = ? where [id] = ? order by [foo] desc;select @@rowcount',
-        bindings: ['foo', 'bar', 1, 5]
+        bindings: [5, 'foo', 'bar', 1]
       },
       postgres: {
         sql: 'update "users" set "email" = ?, "name" = ? where "id" = ?',
@@ -2793,7 +2908,7 @@ describe("QueryBuilder", function() {
       },
       mssql: {
         sql: 'update top (?) [users] set [email] = ?, [name] = ? where [users].[id] = ?;select @@rowcount',
-        bindings: ['foo', 'bar', 1, 1]
+        bindings: [1, 'foo', 'bar', 1]
       },
       postgres: {
         sql: 'update "users" set "email" = ?, "name" = ? where "users"."id" = ?',
@@ -2891,7 +3006,7 @@ describe("QueryBuilder", function() {
         bindings: []
       },
       sqlite3: {
-        sql: 'delete from "users"',
+        sql: 'delete from `users`',
         bindings: [],
         output: function (output) {
           expect(typeof output).to.equal('function');
@@ -3860,7 +3975,7 @@ describe("QueryBuilder", function() {
     expect(mysqlQb.sql).to.equal('select * from `users` where `users`.`name` = ? or `users`.`name` = ?');
     expect(mysqlQb.bindings).to.deep.equal(['Bob', 'Jay']);
 
-    expect(sqliteQb.sql).to.equal('select * from "users" where "users"."name" = ? or "users"."name" = ?');
+    expect(sqliteQb.sql).to.equal('select * from `users` where `users`.`name` = ? or `users`.`name` = ?');
     expect(sqliteQb.bindings).to.deep.equal(['Bob', 'Jay']);
   });
 
@@ -4030,7 +4145,7 @@ describe("QueryBuilder", function() {
       this.select('foo').from('users');
     }).select('*').from('withClause'), {
       mssql: 'with [withClause] as (select [foo] from [users]) select * from [withClause]',
-      sqlite3: 'with "withClause" as (select "foo" from "users") select * from "withClause"',
+      sqlite3: 'with `withClause` as (select `foo` from `users`) select * from `withClause`',
       postgres: 'with "withClause" as (select "foo" from "users") select * from "withClause"',
       oracledb: 'with "withClause" as (select "foo" from "users") select * from "withClause"',
       oracle: 'with "withClause" as (select "foo" from "users") select * from "withClause"'
@@ -4042,7 +4157,7 @@ describe("QueryBuilder", function() {
       this.select('foo').from('users');
     }).insert(raw('select * from "withClause"')).into('users'), {
       mssql: 'with [withClause] as (select [foo] from [users]) insert into [users] select * from "withClause"',
-      sqlite3: 'with "withClause" as (select "foo" from "users") insert into "users" select * from "withClause"',
+      sqlite3: 'with `withClause` as (select `foo` from `users`) insert into `users` select * from "withClause"',
       postgres: 'with "withClause" as (select "foo" from "users") insert into "users" select * from "withClause"'
     });
   });
@@ -4056,7 +4171,7 @@ describe("QueryBuilder", function() {
         bindings: ['bob', 'thisMail', 'sam', 'thatMail', 'jack']
       },
       sqlite3: {
-        sql: 'with "withClause" as (select "foo" from "users" where "name" = ?) insert into "users" ("email", "name") select ? as "email", ? as "name" union all select ? as "email", ? as "name"',
+        sql: 'with `withClause` as (select `foo` from `users` where `name` = ?) insert into `users` (`email`, `name`) select ? as `email`, ? as `name` union all select ? as `email`, ? as `name`',
         bindings: ['bob', 'thisMail', 'sam', 'thatMail', 'jack']
       },
       postgres: {
@@ -4071,7 +4186,7 @@ describe("QueryBuilder", function() {
       this.select('foo').from('users');
     }).update({foo: 'updatedFoo'}).where('email', '=', 'foo').from('users'), {
       mssql: 'with [withClause] as (select [foo] from [users]) update [users] set [foo] = ? where [email] = ?;select @@rowcount',
-      sqlite3: 'with "withClause" as (select "foo" from "users") update "users" set "foo" = ? where "email" = ?',
+      sqlite3: 'with `withClause` as (select `foo` from `users`) update `users` set `foo` = ? where `email` = ?',
       postgres: 'with "withClause" as (select "foo" from "users") update "users" set "foo" = ? where "email" = ?'
     });
   });
@@ -4081,7 +4196,7 @@ describe("QueryBuilder", function() {
       this.select('email').from('users');
     }).del().where('foo', '=', 'updatedFoo').from('users'), {
       mssql: 'with [withClause] as (select [email] from [users]) delete from [users] where [foo] = ?;select @@rowcount',
-      sqlite3: 'with "withClause" as (select "email" from "users") delete from "users" where "foo" = ?',
+      sqlite3: 'with `withClause` as (select `email` from `users`) delete from `users` where `foo` = ?',
       postgres: 'with "withClause" as (select "email" from "users") delete from "users" where "foo" = ?'
     });
   });
@@ -4089,7 +4204,7 @@ describe("QueryBuilder", function() {
   it("raw 'with' clause", function() {
     testsql(qb().with('withRawClause', raw('select "foo" as "baz" from "users"')).select('*').from('withRawClause'), {
       mssql: 'with [withRawClause] as (select "foo" as "baz" from "users") select * from [withRawClause]',
-      sqlite3: 'with "withRawClause" as (select "foo" as "baz" from "users") select * from "withRawClause"',
+      sqlite3: 'with `withRawClause` as (select "foo" as "baz" from "users") select * from `withRawClause`',
       postgres: 'with "withRawClause" as (select "foo" as "baz" from "users") select * from "withRawClause"',
       oracledb: 'with "withRawClause" as (select "foo" as "baz" from "users") select * from "withRawClause"',
       oracle: 'with "withRawClause" as (select "foo" as "baz" from "users") select * from "withRawClause"'
@@ -4103,7 +4218,7 @@ describe("QueryBuilder", function() {
       this.select('bar').from('users');
     }).select('*').from('secondWithClause'), {
       mssql: 'with [firstWithClause] as (select [foo] from [users]), [secondWithClause] as (select [bar] from [users]) select * from [secondWithClause]',
-      sqlite3: 'with "firstWithClause" as (select "foo" from "users"), "secondWithClause" as (select "bar" from "users") select * from "secondWithClause"',
+      sqlite3: 'with `firstWithClause` as (select `foo` from `users`), `secondWithClause` as (select `bar` from `users`) select * from `secondWithClause`',
       postgres: 'with "firstWithClause" as (select "foo" from "users"), "secondWithClause" as (select "bar" from "users") select * from "secondWithClause"',
       oracledb: 'with "firstWithClause" as (select "foo" from "users"), "secondWithClause" as (select "bar" from "users") select * from "secondWithClause"',
       oracle: 'with "firstWithClause" as (select "foo" from "users"), "secondWithClause" as (select "bar" from "users") select * from "secondWithClause"'
@@ -4117,7 +4232,7 @@ describe("QueryBuilder", function() {
       }).select('*').from('withSubClause');
     }).select('*').from('withClause'), {
       mssql: 'with [withClause] as (with [withSubClause] as ((select [foo] from [users]) as [baz]) select * from [withSubClause]) select * from [withClause]',
-      sqlite3: 'with "withClause" as (with "withSubClause" as ((select "foo" from "users") as "baz") select * from "withSubClause") select * from "withClause"',
+      sqlite3: 'with `withClause` as (with `withSubClause` as ((select `foo` from `users`) as `baz`) select * from `withSubClause`) select * from `withClause`',
       postgres: 'with "withClause" as (with "withSubClause" as ((select "foo" from "users") as "baz") select * from "withSubClause") select * from "withClause"',
       oracledb: 'with "withClause" as (with "withSubClause" as ((select "foo" from "users") "baz") select * from "withSubClause") select * from "withClause"',
       oracle: 'with "withClause" as (with "withSubClause" as ((select "foo" from "users") "baz") select * from "withSubClause") select * from "withClause"'
@@ -4134,7 +4249,7 @@ describe("QueryBuilder", function() {
           bindings: [1, 20, 10]
         },
       sqlite3: {
-          sql: 'with "withClause" as (with "withSubClause" as (select "foo" as "baz" from "users" where "baz" > ? and "baz" < ?) select * from "withSubClause") select * from "withClause" where "id" = ?',
+          sql: 'with `withClause` as (with `withSubClause` as (select "foo" as "baz" from "users" where "baz" > ? and "baz" < ?) select * from `withSubClause`) select * from `withClause` where `id` = ?',
           bindings: [1, 20, 10]
         },
       postgres: {
@@ -4163,7 +4278,7 @@ describe("QueryBuilder", function() {
       }).select('*').from('secondWithSubClause');
     }).select('*').from('secondWithClause'), {
       mssql: 'with [firstWithClause] as (with [firstWithSubClause] as ((select [foo] from [users]) as [foz]) select * from [firstWithSubClause]), [secondWithClause] as (with [secondWithSubClause] as ((select [bar] from [users]) as [baz]) select * from [secondWithSubClause]) select * from [secondWithClause]',
-      sqlite3: 'with "firstWithClause" as (with "firstWithSubClause" as ((select "foo" from "users") as "foz") select * from "firstWithSubClause"), "secondWithClause" as (with "secondWithSubClause" as ((select "bar" from "users") as "baz") select * from "secondWithSubClause") select * from "secondWithClause"',
+      sqlite3: 'with `firstWithClause` as (with `firstWithSubClause` as ((select `foo` from `users`) as `foz`) select * from `firstWithSubClause`), `secondWithClause` as (with `secondWithSubClause` as ((select `bar` from `users`) as `baz`) select * from `secondWithSubClause`) select * from `secondWithClause`',
       postgres: 'with "firstWithClause" as (with "firstWithSubClause" as ((select "foo" from "users") as "foz") select * from "firstWithSubClause"), "secondWithClause" as (with "secondWithSubClause" as ((select "bar" from "users") as "baz") select * from "secondWithSubClause") select * from "secondWithClause"',
       oracledb: 'with "firstWithClause" as (with "firstWithSubClause" as ((select "foo" from "users") "foz") select * from "firstWithSubClause"), "secondWithClause" as (with "secondWithSubClause" as ((select "bar" from "users") "baz") select * from "secondWithSubClause") select * from "secondWithClause"',
       oracle: 'with "firstWithClause" as (with "firstWithSubClause" as ((select "foo" from "users") "foz") select * from "firstWithSubClause"), "secondWithClause" as (with "secondWithSubClause" as ((select "bar" from "users") "baz") select * from "secondWithSubClause") select * from "secondWithClause"'
@@ -4182,4 +4297,13 @@ describe("QueryBuilder", function() {
     });
   })
 
+  it('#2003, properly escapes objects with toPostgres specialization', function () {
+    function TestObject() { }
+    TestObject.prototype.toPostgres = function() {
+      return 'foobar'
+    }
+    testquery(qb().table('sometable').insert({ id: new TestObject() }), {
+      postgres: "insert into \"sometable\" (\"id\") values ('foobar')"
+    });
+  })
 });

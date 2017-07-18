@@ -476,7 +476,7 @@ describe("Oracle SchemaBuilder", function() {
     }).toSQL();
 
     equal(1, tableSql.length);
-    expect(tableSql[0].sql).to.equal('alter table "users" add "created_at" timestamp with time zone, add "updated_at" timestamp with time zone');
+    expect(tableSql[0].sql).to.equal('alter table "users" add ("created_at" timestamp with time zone, "updated_at" timestamp with time zone)');
   });
 
   it('test adding binary', function() {
@@ -495,6 +495,24 @@ describe("Oracle SchemaBuilder", function() {
 
     equal(1, tableSql.length);
     expect(tableSql[0].sql).to.equal('alter table "users" add "foo" decimal(2, 6)');
+  });
+
+  it('test set comment', function() {
+    tableSql = client.schemaBuilder().table('users', function(t) {
+      t.comment('Custom comment');
+    }).toSQL();
+
+    equal(1, tableSql.length);
+    expect(tableSql[0].sql).to.equal('comment on table "users" is \'Custom comment\'');
+  });
+
+  it('test set empty comment', function() {
+    tableSql = client.schemaBuilder().table('users', function(t) {
+      t.comment('');
+    }).toSQL();
+
+    equal(1, tableSql.length);
+    expect(tableSql[0].sql).to.equal('comment on table "users" is \'\'');
   });
 
   it('is possible to set raw statements in defaultTo, #146', function() {

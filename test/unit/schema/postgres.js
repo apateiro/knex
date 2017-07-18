@@ -5,9 +5,81 @@
 var tableSql;
 
 var PG_Client = require('../../../lib/dialects/postgres');
-var client    = new PG_Client({})
+var client    = new PG_Client({});
+var knex = require('../../../knex');
 
 var equal  = require('assert').equal;
+
+describe('PostgreSQL Config', function() {
+  var knexInstance;
+  var version;
+  var config = {
+    client: 'pg',
+    connection: {
+      user: 'postgres',
+      password: '',
+      host: '127.0.0.1',
+      database: 'knex_test'
+    }
+  };
+  describe('check version', function() {
+    describe('check version < 9.2', function() {
+      beforeEach(function () {
+        version = '7.2';
+        config.version = version;
+        knexInstance = knex(config);
+      });
+
+      it('client.version', function(){
+        expect(knexInstance.client.version).to.equal(version);
+      });
+
+      it('json', function() {
+        tableSql = knexInstance.schema.table('public', function(t) {
+          t.json('test_name');
+        }).toSQL();
+        equal(1, tableSql.length);
+        expect(tableSql[0].sql).to.equal('alter table "public" add column "test_name" text');
+      });
+
+      it('jsonb', function() {
+        tableSql = knexInstance.schema.table('public', function (t) {
+          t.jsonb('test_name');
+        }).toSQL();
+        equal(1, tableSql.length);
+        expect(tableSql[0].sql).to.equal('alter table "public" add column "test_name" text');
+      });
+    });
+
+    describe('check version >= 9.2', function() {
+      beforeEach(function() {
+        version = '9.5';
+        config.version = version;
+        knexInstance = knex(config);
+      });
+
+      it('client.version', function(){
+        expect(knexInstance.client.version).to.equal(version);
+      });
+
+      it('json', function() {
+        tableSql = knexInstance.schema.table('public', function(t) {
+          t.json('test_name');
+        }).toSQL();
+        equal(1, tableSql.length);
+        expect(tableSql[0].sql).to.equal('alter table "public" add column "test_name" json');
+      });
+
+      it('jsonb', function() {
+        tableSql = knexInstance.schema.table('public', function(t) {
+          t.jsonb('test_name');
+        }).toSQL();
+        equal(1, tableSql.length);
+        expect(tableSql[0].sql).to.equal('alter table "public" add column "test_name" jsonb');
+      });
+    });
+  });
+});
 
 describe("PostgreSQL SchemaBuilder", function() {
 
@@ -143,6 +215,14 @@ describe("PostgreSQL SchemaBuilder", function() {
     expect(tableSql[0].sql).to.equal('drop index "foo"');
   });
 
+  it("drop index, with schema", function() {
+    tableSql = client.schemaBuilder().withSchema('mySchema').table('users', function(table) {
+      table.dropIndex('foo');
+    }).toSQL();
+    equal(1, tableSql.length);
+    expect(tableSql[0].sql).to.equal('drop index "mySchema"."users_foo_index"');
+  });
+
   it("drop foreign", function() {
     tableSql = client.schemaBuilder().table('users', function(table) {
       table.dropForeign('foo');
@@ -171,6 +251,14 @@ describe("PostgreSQL SchemaBuilder", function() {
     tableSql = client.schemaBuilder().renameTable('users', 'foo').toSQL();
     equal(1, tableSql.length);
     expect(tableSql[0].sql).to.equal('alter table "users" rename to "foo"');
+  });
+
+  it("rename column", function() {
+    tableSql = client.schemaBuilder().table('users', function(table) {
+      table.renameColumn('foo', 'bar');
+    }).toSQL();
+    equal(1, tableSql.length);
+    expect(tableSql[0].sql).to.equal('alter table "users" rename "foo" to "bar"');
   });
 
   it("adding primary key", function() {
@@ -505,6 +593,22 @@ describe("PostgreSQL SchemaBuilder", function() {
       t.jsonb('preferences');
     }).toSQL();
     expect(tableSql[0].sql).to.equal('alter table "user" add column "preferences" jsonb');
+  });
+
+  it('set comment', function() {
+    tableSql = client.schemaBuilder().table('user', function(t) {
+      t.comment('Custom comment');
+    }).toSQL();
+    equal(1, tableSql.length);
+    expect(tableSql[0].sql).to.equal('comment on table "user" is \'Custom comment\'');
+  });
+
+  it('set empty comment', function() {
+    tableSql = client.schemaBuilder().table('user', function(t) {
+      t.comment('');
+    }).toSQL();
+    equal(1, tableSql.length);
+    expect(tableSql[0].sql).to.equal('comment on table "user" is \'\'');
   });
 
   it('allows adding default json objects when the column is json', function() {

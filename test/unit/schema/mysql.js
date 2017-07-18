@@ -271,6 +271,15 @@ describe(dialect + " SchemaBuilder", function() {
     expect(tableSql[0].sql).to.equal('alter table `users` add `name` varchar(255) after `foo`');
   });
 
+  it('test adding column after another column with comment', function() {
+    tableSql = client.schemaBuilder().table('users', function() {
+      this.string('name').after('foo').comment('bar');
+    }).toSQL();
+
+    equal(1, tableSql.length);
+    expect(tableSql[0].sql).to.equal('alter table `users` add `name` varchar(255) comment \'bar\' after `foo`');
+  });
+
   it('test adding column on the first place', function() {
     tableSql = client.schemaBuilder().table('users', function() {
       this.string('first_name').first();
@@ -278,6 +287,15 @@ describe(dialect + " SchemaBuilder", function() {
 
     equal(1, tableSql.length);
     expect(tableSql[0].sql).to.equal('alter table `users` add `first_name` varchar(255) first');
+  });
+
+  it('test adding column on the first place with comment', function() {
+    tableSql = client.schemaBuilder().table('users', function() {
+      this.string('first_name').first().comment('bar');
+    }).toSQL();
+
+    equal(1, tableSql.length);
+    expect(tableSql[0].sql).to.equal('alter table `users` add `first_name` varchar(255) comment \'bar\' first');
   });
 
   it('test adding string', function() {
@@ -484,6 +502,24 @@ describe(dialect + " SchemaBuilder", function() {
 
     equal(1, tableSql.length);
     expect(tableSql[0].sql).to.equal('alter table `users` add `foo` decimal(2, 6)');
+  });
+
+  it('test set comment', function() {
+    tableSql = client.schemaBuilder().table('users', function(t) {
+      t.comment('Custom comment');
+    }).toSQL();
+
+    equal(1, tableSql.length);
+    expect(tableSql[0].sql).to.equal('alter table `users` comment = \'Custom comment\'');
+  });
+
+  it('test set empty comment', function() {
+    tableSql = client.schemaBuilder().table('users', function(t) {
+      t.comment('');
+    }).toSQL();
+
+    equal(1, tableSql.length);
+    expect(tableSql[0].sql).to.equal('alter table `users` comment = \'\'');
   });
 
   it('should alter columns with the alter flag', function() {

@@ -11,9 +11,11 @@ export default function batchInsert(client, tableName, batch, chunkSize = 1000) 
 
   const getTransaction = () => new Promise((resolve, reject) => {
     if(transaction) {
+      autoTransaction = false;
       return resolve(transaction);
     }
 
+    autoTransaction = true;
     client.transaction(resolve)
     .catch(reject);
   });
@@ -35,18 +37,23 @@ export default function batchInsert(client, tableName, batch, chunkSize = 1000) 
       .then((tr) => {
         return Promise.mapSeries(chunks, (items) => tr(tableName).insert(items, returning))
           .then((result) => {
+            result = flatten(result || []);
+
             if(autoTransaction) {
-              tr.commit();
+              //TODO: -- Oracle tr.commit() does not return a 'thenable' !? Ugly hack for now.
+              return (tr.commit(result) || Promise.resolve())
+                .then(() => result);
             }
 
-            return flatten(result);
+            return result;
           })
           .catch((error) => {
             if(autoTransaction) {
-              tr.rollback(error);
+              return tr.rollback(error)
+                .then(() => Promise.reject(error));
             }
 
-            throw error;
+            return Promise.reject(error);
           })
       })
       .then(resolve)
@@ -60,7 +67,6 @@ export default function batchInsert(client, tableName, batch, chunkSize = 1000) 
     },
     transacting(tr) {
       transaction = tr;
-      autoTransaction = false;
 
       return this;
     }
